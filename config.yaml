@@ -1,0 +1,21 @@
+# Gateway Configuration (config.yaml)
+gateway:
+  # Network settings
+  public_host: "0.0.0.0"
+  public_port: 50053
+  control_host: "0.0.0.0"
+  control_port: 50054
+  tunnel_port_base: 60000
+
+  # TLS configuration
+  tls:
+    enabled: true
+    cert_path: "./certs/server.crt"
+    key_path: "./certs/server.key"
+    longevity_years: 5  # Certificate validity period in years
+
+  # Authentication
+  auth_token: ""  # Leave empty to auto-generate, or provide a fixed token
+
+  # Logging
+  log_level: "info"  # debug, info, warn, error
