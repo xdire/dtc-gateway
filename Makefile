@@ -60,6 +60,11 @@ install-deps:
 	@echo "Installing dependencies..."
 	$(GOMOD) download
 
+# Generate protobuf files
+generate-proto:
+	@echo "Generating protobuf files..."
+	protoc --go_out=. --go-grpc_out=. gol/gateway/gateway.proto
+
 # Install the binary
 install: build
 	@echo "Installing $(BINARY)..."
@@ -77,7 +82,9 @@ load-config:
 	$(eval TLS_CERT=$(shell yq '.gateway.tls.cert_path' $(CONFIG_FILE) 2>/dev/null || echo "./certs/server.crt"))
 	$(eval TLS_KEY=$(shell yq '.gateway.tls.key_path' $(CONFIG_FILE) 2>/dev/null || echo "./certs/server.key"))
 	$(eval CERT_YEARS=$(shell yq '.gateway.tls.longevity_years' $(CONFIG_FILE) 2>/dev/null || echo "5"))
-	$(eval CERT_DAYS=$(shell echo $$(($(CERT_YEARS) * 365))))
+	$(eval CERT_DAYS=$(shell echo $(($(CERT_YEARS) * 365))))
+	$(eval HTTP_ENABLED=$(shell yq '.gateway.http_cert_server.enabled' $(CONFIG_FILE) 2>/dev/null || echo "true"))
+	$(eval HTTP_PORT=$(shell yq '.gateway.http_cert_server.port' $(CONFIG_FILE) 2>/dev/null || echo "8443"))
 	$(eval LOG_LEVEL=$(shell yq '.gateway.log_level' $(CONFIG_FILE) 2>/dev/null || echo "info"))
 	$(eval AUTH_TOKEN=$(shell yq '.gateway.auth_token' $(CONFIG_FILE) 2>/dev/null || echo ""))
 	@if [ -z "$(AUTH_TOKEN)" ]; then \

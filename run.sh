@@ -16,6 +16,8 @@ if command -v yq &> /dev/null && [ -f "$CONFIG_FILE" ]; then
     TLS_ENABLED=$(yq '.gateway.tls.enabled' "$CONFIG_FILE")
     TLS_CERT=$(yq '.gateway.tls.cert_path' "$CONFIG_FILE")
     TLS_KEY=$(yq '.gateway.tls.key_path' "$CONFIG_FILE")
+    HTTP_ENABLED=$(yq '.gateway.http_cert_server.enabled' "$CONFIG_FILE")
+    HTTP_PORT=$(yq '.gateway.http_cert_server.port' "$CONFIG_FILE")
     LOG_LEVEL=$(yq '.gateway.log_level' "$CONFIG_FILE")
     AUTH_TOKEN=$(yq '.gateway.auth_token' "$CONFIG_FILE")
 
@@ -42,6 +44,8 @@ else
     CONTROL_PORT=50054
     TUNNEL_PORT_BASE=60000
     TLS_ENABLED=false
+    HTTP_ENABLED=true
+    HTTP_PORT=8443
     LOG_LEVEL="info"
 fi
 
@@ -53,6 +57,13 @@ fi
 
 # Build command
 CMD="go run main.go --public-host=$PUBLIC_HOST --public-port=$PUBLIC_PORT --control-host=$CONTROL_HOST --control-port=$CONTROL_PORT --tunnel-port-base=$TUNNEL_PORT_BASE --auth-token=$AUTH_TOKEN --log-level=$LOG_LEVEL"
+
+# Add HTTP cert server parameters if enabled
+if [ "$HTTP_ENABLED" = "true" ]; then
+    CMD="$CMD --http-port=$HTTP_PORT"
+else
+    CMD="$CMD --http-port=0"  # 0 disables the HTTP server
+fi
 
 # Add TLS parameters if enabled
 if [ "$TLS_ENABLED" = "true" ]; then
