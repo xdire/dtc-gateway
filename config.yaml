@@ -14,8 +14,13 @@ gateway:
     key_path: "./certs/server.key"
     longevity_years: 5  # Certificate validity period in years
 
+  # HTTP Certificate Server
+  http_cert_server:
+    enabled: true
+    port: 8443
+    
   # Authentication
-  auth_token: ""  # Leave empty to auto-generate, or provide a fixed token
+  auth_token: "303ae51c1bfbe5f7065edf30e3c8d9f2dccefa8cad3deeaab035e4ffa0b37a3e"  # Leave empty to auto-generate, or provide a fixed token
 
   # Logging
-  log_level: "info"  # debug, info, warn, error
+  log_level: "debug"  # debug, info, warn, error
