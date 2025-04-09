@@ -134,6 +134,9 @@ func (s *GatewayServer) Start(ctx context.Context) error {
 	// Start stats collector
 	go s.collectStats(ctx)
 
+	// Start inactive agent cleanup
+	go s.cleanupInactiveAgents(ctx)
+
 	// Wait for context cancellation
 	<-ctx.Done()
 
@@ -620,20 +623,67 @@ func (s *GatewayServer) SelectAgent() *entities.Agent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// TODO: Implement more sophisticated agent selection logic
-	// For now, just return the first connected agent
+	var bestAgent *entities.Agent
+	var bestScore float64 = -1
+
+	now := time.Now()
+
 	for _, agent := range s.agents {
 		agent.Mutex.Lock()
-		status := agent.Status
-		hasControlStream := agent.ControlStream != nil
+
+		// Basic qualification
+		if agent.Status != gateway.AgentStatus_CONNECTED ||
+			agent.ControlStream == nil ||
+			agent.TunnelListener == nil {
+			agent.Mutex.Unlock()
+			continue
+		}
+
+		// Calculate a score based on multiple factors
+		uptime := now.Sub(agent.ConnectedAt).Seconds()
+		activeSessions := float64(agent.Stats.ActiveSessions)
+		reliability := 1.0 // Could track successful tunnels vs failures
+
+		// A simple scoring formula - prefer agents with longer uptime
+		// and fewer active sessions
+		score := (uptime * reliability) / (activeSessions + 1)
+
+		// Verify tunnel listener is still active by attempting a test connection
+		tunnelAddr := fmt.Sprintf("%s:%d", s.config.ControlHost, agent.TunnelListenerPort)
+		conn, err := net.DialTimeout("tcp", tunnelAddr, 500*time.Millisecond)
+
+		// Reduce score significantly if tunnel listener isn't responding
+		if err != nil {
+			s.Logger.Debug().
+				Err(err).
+				Str("agent_id", agent.ID).
+				Str("tunnel_addr", tunnelAddr).
+				Msg("Agent tunnel connection test failed")
+			score = score * 0.1
+		} else {
+			// Close the test connection immediately if successful
+			conn.Close()
+		}
+
 		agent.Mutex.Unlock()
 
-		if status == gateway.AgentStatus_CONNECTED && hasControlStream {
-			return agent
+		// Update best agent if this one has a higher score
+		if score > bestScore {
+			bestScore = score
+			bestAgent = agent
 		}
 	}
 
-	return nil
+	if bestAgent != nil {
+		s.Logger.Debug().
+			Str("agent_id", bestAgent.ID).
+			Float64("score", bestScore).
+			Msg("Selected agent for connection")
+	} else {
+		s.Logger.Warn().Msg("No suitable agent found for connection")
+	}
+
+	return bestAgent
 }
 
 // RegisterAgent implements the RegisterAgent RPC
@@ -745,6 +795,7 @@ func (s *GatewayServer) ControlChannel(stream gateway.GatewayService_ControlChan
 	agent.Mutex.Lock()
 	agent.ControlStream = stream
 	agent.Status = gateway.AgentStatus_CONNECTED
+	agent.LastActivity = time.Now()
 	agent.Mutex.Unlock()
 
 	s.Logger.Info().
@@ -800,6 +851,11 @@ func (s *GatewayServer) ControlChannel(stream gateway.GatewayService_ControlChan
 				Timestamp: timestamppb.Now(),
 			}
 
+			// Update status on heartbeat
+			agent.Mutex.Lock()
+			agent.LastActivity = time.Now()
+			agent.Mutex.Unlock()
+
 			if err := stream.Send(heartbeatResp); err != nil {
 				s.Logger.Error().
 					Err(err).
@@ -819,6 +875,7 @@ func (s *GatewayServer) ControlChannel(stream gateway.GatewayService_ControlChan
 			if stats := msg.GetStats(); stats != nil {
 				agent.Mutex.Lock()
 				agent.Stats = stats
+				agent.LastActivity = time.Now()
 				agent.Mutex.Unlock()
 
 				s.Logger.Debug().
@@ -1074,6 +1131,7 @@ func (s *GatewayServer) handleTunnelConnection(agent *entities.Agent, conn net.C
 	// Store the tunnel connection
 	agent.Mutex.Lock()
 	agent.Tunnels[tunnelID] = conn
+	agent.LastActivity = time.Now()
 	agent.Mutex.Unlock()
 
 	s.Logger.Info().
@@ -1102,6 +1160,65 @@ func (s *GatewayServer) collectStats(ctx context.Context) {
 				Int("sessions", len(s.sessions)).
 				Msg("Stats update")
 			s.mu.RUnlock()
+		}
+	}
+}
+
+// Add this method to GatewayServer
+func (s *GatewayServer) cleanupInactiveAgents(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			before := len(s.agents)
+			agentsToRemove := make([]string, 0)
+
+			// First pass: identify agents to remove
+			for id, agent := range s.agents {
+				agent.Mutex.Lock()
+				status := agent.Status
+				lastActive := agent.LastActivity
+
+				// Check if the agent is disconnected or inactive for more than 30 minutes
+				if status == gateway.AgentStatus_DISCONNECTED || time.Since(lastActive) > 30*time.Minute {
+					agentsToRemove = append(agentsToRemove, id)
+				}
+				agent.Mutex.Unlock()
+			}
+
+			// Second pass: remove identified agents
+			for _, id := range agentsToRemove {
+				agent := s.agents[id]
+
+				// Close all resources
+				agent.Mutex.Lock()
+				if agent.TunnelListener != nil {
+					agent.TunnelListener.Close()
+				}
+				for _, conn := range agent.Tunnels {
+					conn.Close()
+				}
+				agent.Mutex.Unlock()
+
+				// Remove from map
+				delete(s.agents, id)
+				s.stats.ActiveAgents--
+			}
+
+			after := len(s.agents)
+			if before != after {
+				s.Logger.Info().
+					Int("before", before).
+					Int("after", after).
+					Int("removed", before-after).
+					Msg("Cleaned up inactive agents")
+			}
+			s.mu.Unlock()
 		}
 	}
 }
