@@ -41,9 +41,11 @@ type Agent struct {
 	Name               string
 	Version            string
 	ConnectedAt        time.Time
+	LastActivity       time.Time
 	Status             gateway.AgentStatus
 	ControlStream      gateway.GatewayService_ControlChannelServer
 	TunnelListenerPort int
+	HeartbeatFailures  int
 	TunnelListener     net.Listener
 	Tunnels            map[string]net.Conn
 	Metadata           map[string]string
